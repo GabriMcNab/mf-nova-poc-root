@@ -1,25 +1,63 @@
 on:
   push:
     branches:
-    - master
+      - main
 
 env:
   GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
 
 jobs:
-  deploy-to-gcs:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Setup - gcloud / gsutil
-        uses: GoogleCloudPlatform/github-actions/setup-gcloud@master
+      - uses: actions/checkout@v3
+      - uses: pnpm/action-setup@v2.2.2
         with:
-          service_account_key: ${{ secrets.GCS_SA_KEY }}
-          project_id: ${{ secrets.GCS_PROJECT }}
-          export_default_credentials: true
+          version: 7
 
-      - name: Deploy
-        run: |-
-          gsutil -m rsync -R output gs://$GCS_BUCKET
+      - name: Use Node.js 14.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build --if-present
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: bundle
+          path: ./dist/
+          retention: 1
+
+  deploy-to-gcs:
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: "read"
+      id-token: "write"
+    steps:
+      - uses: actions/checkout@v2
+  
+      - id: "auth"
+        uses: "google-github-actions/auth@v0"
+        with:
+          workload_identity_provider: "projects/670867506313/locations/global/workloadIdentityPools/default-pool/providers/default-provider"
+          service_account: "sa-github-deployer@nova-microfrontends-poc.iam.gserviceaccount.com"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: bundle
+          path: dist
+
+      - id: "upload-folder"
+        uses: "google-github-actions/upload-cloud-storage@v0"
+        with:
+          path: "dist"
+          destination: "nova-mf-poc-root-config"
+          parent: false
